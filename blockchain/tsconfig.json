@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "types": ["node", "mocha", "chai", "hardhat"]
+  },
+  "include": [
+    "./scripts",
+    "./test",
+    "./contracts",
+    "./hardhat.config.ts",
+    "./ignition",
+    "./hardhat-env.d.ts"   // 👈 thêm dòng này
+  ]
+}
