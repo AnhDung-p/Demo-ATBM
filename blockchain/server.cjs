@@ -1,105 +1,71 @@
-// server.cjs
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { ethers } = require("ethers");
 
-// --- ENV ---
 const RPC_URL = process.env.RPC_URL || "http://127.0.0.1:8545";
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x5FbDB2315678afecb367f032d93F642f64180aa3";
-const PORT = Number(process.env.PORT || 3001);
-const CHECK_ONCHAIN = process.env.CHECK_ONCHAIN !== "false"; // default: true
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const PORT = process.env.PORT || 3001;
 
-// --- ABI tối thiểu ---
-const ABI = [
-  { "inputs":[{"internalType":"bytes32","name":"_emailHash","type":"bytes32"}], "name":"register","outputs":[], "stateMutability":"nonpayable","type":"function" },
-  { "inputs":[{"internalType":"address","name":"_user","type":"address"}], "name":"isRegistered","outputs":[{"internalType":"bool","name":"","type":"bool"}], "stateMutability":"view","type":"function" },
-  { "inputs":[{"internalType":"address","name":"_user","type":"address"}], "name":"getEmailHash","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}], "stateMutability":"view","type":"function" }
-];
-
-// --- App ---
-const app = express();
-app.use(express.json());
-// Cho phép mọi origin (demo). Khi lên prod hãy whiltelist domain.
-app.use(cors({ origin: true }));
-
-// --- Blockchain bindings ---
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-let contract;
-try {
-  contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
-} catch (e) {
-  console.error("[BOOT] Contract init failed:", e.message);
+if (!CONTRACT_ADDRESS) {
+  console.error("❌ Missing CONTRACT_ADDRESS in .env");
+  process.exit(1);
 }
 
-// --- Nonces (RAM) ---
-const nonces = new Map(); // key = checksum address
+const ABI = [
+  {"inputs":[{"internalType":"bytes32","name":"_emailHash","type":"bytes32"}],"name":"register","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"address","name":"_user","type":"address"}],"name":"isRegistered","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
+];
 
-// Helpers
-const toChecksum = (addr) => ethers.getAddress(addr);
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-// Health check
-app.get("/health", (req, res) => {
-  res.json({ ok: true, rpc: RPC_URL, contract: CONTRACT_ADDRESS, checkOnChain: CHECK_ONCHAIN });
-});
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
 
-// 1) Issue nonce
+// Demo store nonce in memory
+const nonces = new Map();
+
+app.get("/health", (req,res)=>res.json({ok:true, contract: CONTRACT_ADDRESS}));
+
 app.post("/api/nonce", (req, res) => {
-  try {
-    const { address } = req.body || {};
-    if (!address) return res.status(400).json({ ok: false, error: "MISSING_ADDRESS" });
-
-    const cs = toChecksum(address);
-    const nonce = `LOGIN_NONCE_${Math.floor(Math.random() * 1e9)}`;
-    nonces.set(cs, nonce);
-    console.log("[nonce]", cs, "=>", nonce);
-    return res.json({ ok: true, nonce });
-  } catch (e) {
-    return res.status(400).json({ ok: false, error: "BAD_ADDRESS", details: e.message });
-  }
+  const { address } = req.body || {};
+  if (!address) return res.status(400).json({ error: "MISSING_ADDRESS" });
+  const nonce = "LOGIN_NONCE_" + Math.floor(Math.random() * 1e9);
+  nonces.set(address.toLowerCase(), nonce);
+  console.log("→ /api/nonce", address, "=>", nonce);
+  res.json({ nonce });
 });
 
-// 2) Verify signature (+ optional on-chain check)
 app.post("/api/verify", async (req, res) => {
+  const { address, signature } = req.body || {};
+  if (!address || !signature) return res.status(400).json({ error: "MISSING_FIELDS" });
+
+  const nonce = nonces.get(address.toLowerCase());
+  if (!nonce) return res.status(400).json({ error: "NO_NONCE" });
+
   try {
-    const { address, signature } = req.body || {};
-    if (!address || !signature) return res.status(400).json({ ok: false, error: "MISSING_PARAMS" });
-
-    const cs = toChecksum(address);
-    const nonce = nonces.get(cs);
-    if (!nonce) return res.status(400).json({ ok: false, error: "NO_NONCE" });
-
-    // Verify signature
     const recovered = ethers.verifyMessage(nonce, signature);
-    const okSig = toChecksum(recovered) === cs;
-    if (!okSig) return res.status(401).json({ ok: false, error: "BAD_SIGNATURE" });
+    const okSig = recovered.toLowerCase() === address.toLowerCase();
+    const registered = await contract.isRegistered(address);
 
-    // Optional: check on-chain
-    if (CHECK_ONCHAIN) {
-      try {
-        if (!contract) throw new Error("Contract not initialized");
-        const registered = await contract.isRegistered(cs);
-        if (!registered) {
-          return res.status(403).json({ ok: false, error: "NOT_REGISTERED" });
-        }
-      } catch (err) {
-        console.error("[verify] isRegistered failed:", err);
-        return res.status(502).json({ ok: false, error: "CHAIN_CHECK_FAILED", details: err.message });
-      }
+    console.log("→ /api/verify",
+      { address, recovered, okSig, registered }
+    );
+
+    if (okSig && registered) {
+      nonces.delete(address.toLowerCase());
+      return res.json({ success: true });
     }
-
-    nonces.delete(cs);
-    console.log("[verify] OK for", cs);
-    return res.json({ ok: true });
+    const reason = okSig ? "NOT_REGISTERED" : "INVALID_SIGNATURE";
+    return res.status(401).json({ success: false, reason });
   } catch (e) {
-    console.error("[verify] error:", e);
-    return res.status(400).json({ ok: false, error: "VERIFY_ERROR", details: e.message });
+    console.error("verify error:", e);
+    return res.status(400).json({ error: e.message || "BAD_REQUEST" });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Auth server running: http://127.0.0.1:${PORT}`);
-  console.log(`RPC: ${RPC_URL}`);
-  console.log(`CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}`);
-  console.log(`CHECK_ONCHAIN: ${CHECK_ONCHAIN}`);
-});
+app.listen(PORT, () =>
+  console.log(`✅ Auth server running: http://localhost:${PORT} (contract ${CONTRACT_ADDRESS})`)
+);

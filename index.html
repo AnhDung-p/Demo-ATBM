@@ -9,7 +9,7 @@
 <body class="bg-light">
   <nav class="navbar navbar-expand-lg bg-white border-bottom">
     <div class="container">
-      <a class="navbar-brand fw-semibold" href="index.html">Auth Demo</a>
+      <a class="navbar-brand fw-semibold" href="index.html">Xác minh danh tính</a>
       <div class="ms-auto d-flex gap-2">
         <a id="loginLink" class="btn btn-outline-primary" href="login.html">Đăng nhập</a>
         <a id="registerLink" class="btn btn-primary" href="register.html">Đăng ký</a>
@@ -20,8 +20,8 @@
 
   <main class="container py-5">
     <div class="p-5 bg-white rounded-4 shadow-sm text-center">
-      <h2 class="mb-3">Xin chào, <span id="displayName">Khách</span> 👋</h2>
-      <p class="text-muted mb-4">Đây là trang chủ của dự án xác thực.</p>
+      <h2 class="mb-3">Xin chào, <span id="displayName">Khách</span> </h2>
+      <p class="text-muted mb-4">Trang chủ</p>
       <div id="ctaArea">
         <a href="login.html" class="btn btn-primary me-2">Đăng nhập</a>
         <a href="register.html" class="btn btn-outline-primary">Đăng ký</a>
@@ -29,9 +29,9 @@
     </div>
   </main>
 
-  <script>
-    function getCurrentUser(){const r=localStorage.getItem("currentUser");return r?JSON.parse(r):null}
-    function clearCurrentUser(){localStorage.removeItem("currentUser")}
+  <script type="module">
+    import { getCurrentUser, clearCurrentUser } from "./web3.js";
+
     const user = getCurrentUser();
     const nameEl = document.getElementById('displayName');
     const cta = document.getElementById('ctaArea');
@@ -40,15 +40,16 @@
     const logoutBtn = document.getElementById('logoutBtn');
 
     if (user) {
-      nameEl.textContent = user.fullname || user.email || "Người dùng";
+      nameEl.textContent = user.fullname || user.wallet?.slice(0,6)+"..."+user.wallet?.slice(-4) || "Người dùng";
       cta.classList.add('d-none');
       loginLink.classList.add('d-none');
       registerLink.classList.add('d-none');
       logoutBtn.classList.remove('d-none');
     }
+
     logoutBtn?.addEventListener('click', () => {
       clearCurrentUser();
-      location.reload();
+      window.location.reload();
     });
   </script>
 </body>

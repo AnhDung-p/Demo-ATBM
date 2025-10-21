@@ -1,115 +1,114 @@
-// web3.js — ES Module cho frontend (dùng với ethers UMD đã nhúng trong HTML)
+// web3.js — Wallet-only auth (không email/mật khẩu)
+export const SERVER_URL = "http://localhost:3001"; // backend nonce/verify
 
-export const SERVER_URL = "http://localhost:3001"; // backend /api/nonce, /api/verify
-export const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3"; // địa chỉ contract hardhat local
+// ===== Helpers phiên & hồ sơ hiển thị (localStorage) =====
+const KEY_CURRENT = "currentUser";
+const KEY_PROFILES = "profiles"; // { [walletLower]: { fullname } }
 
-// ABI rút gọn của IdentityManager
+export function setCurrentUser(u) {
+  localStorage.setItem(KEY_CURRENT, JSON.stringify(u));
+}
+export function getCurrentUser() {
+  try { return JSON.parse(localStorage.getItem(KEY_CURRENT)||"null"); } catch { return null; }
+}
+export function clearCurrentUser() { localStorage.removeItem(KEY_CURRENT); }
+
+export function getProfiles() {
+  try { return JSON.parse(localStorage.getItem(KEY_PROFILES)||"{}"); } catch { return {}; }
+}
+export function setProfiles(p) { localStorage.setItem(KEY_PROFILES, JSON.stringify(p)); }
+
+export function setProfile(wallet, profile) {
+  const k = wallet.toLowerCase();
+  const all = getProfiles();
+  all[k] = { ...(all[k]||{}), ...profile };
+  setProfiles(all);
+}
+export function getProfile(wallet) {
+  return getProfiles()[wallet?.toLowerCase()] || null;
+}
+export function shortAddr(a) {
+  return a ? a.slice(0,6) + "..." + a.slice(-4) : "";
+}
+
+// ===== MetaMask =====
+export async function connectWallet() {
+  if (!window.ethereum) throw new Error("Chưa cài MetaMask");
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  const accounts = await provider.send("eth_requestAccounts", []);
+  return accounts[0];
+}
+
+// ===== Smart contract (IdentityManager) =====
+const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 const ABI = [
-  {
-    "inputs":[{"internalType":"bytes32","name":"_emailHash","type":"bytes32"}],
-    "name":"register","outputs":[],"stateMutability":"nonpayable","type":"function"
-  },
-  {
-    "inputs":[{"internalType":"address","name":"_user","type":"address"}],
-    "name":"isRegistered","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"
-  },
-  {
-    "inputs":[{"internalType":"address","name":"_user","type":"address"}],
-    "name":"getEmailHash","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"stateMutability":"view","type":"function"
-  }
+  {"inputs":[{"internalType":"bytes32","name":"_emailHash","type":"bytes32"}],"name":"register","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"address","name":"_user","type":"address"}],"name":"isRegistered","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
 ];
 
-// ethers từ UMD
-const { ethers } = window;
+function getContractWithSigner() {
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  return provider.getSigner().then(signer => {
+    return new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+  });
+}
+function getContractRead() {
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  return new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+}
 
-// ===== helpers ethers/metamask =====
-async function getProvider() {
+// Đăng ký on-chain cho địa chỉ ví (không email)
+export async function registerWalletOnly() {
   if (!window.ethereum) throw new Error("Chưa cài MetaMask");
-  return new ethers.BrowserProvider(window.ethereum);
-}
-async function getSigner() {
-  const p = await getProvider();
-  return p.getSigner();
-}
-async function getContract(write = false) {
-  const p = await getProvider();
-  return new ethers.Contract(CONTRACT_ADDRESS, ABI, write ? await p.getSigner() : p);
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  const signer = await provider.getSigner();
+  const addr = await signer.getAddress();
+
+  const contract = await getContractWithSigner();
+  // Dùng keccak256(address) làm “emailHash” thay thế
+  const pseudoHash = ethers.keccak256(ethers.toUtf8Bytes(addr.toLowerCase()));
+  const tx = await contract.register(pseudoHash);
+  await tx.wait();
+  return addr;
 }
 
-// ===== session helpers =====
-export function setCurrentUser(u) { localStorage.setItem("currentUser", JSON.stringify(u)); }
-export function getCurrentUser() { try { return JSON.parse(localStorage.getItem("currentUser")||"null"); } catch { return null; } }
-export function clearCurrentUser() { localStorage.removeItem("currentUser"); }
-
-// ===== auth/web3 functions =====
-export async function connectWallet() {
-  const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-  if (!accounts?.length) throw new Error("Không lấy được tài khoản");
-  return ethers.getAddress(accounts[0]);
+// Kiểm tra on-chain đã đăng ký
+export async function isRegisteredOnChain(address) {
+  const contract = await getContractRead();
+  return await contract.isRegistered(address);
 }
 
-export function hashEmail(email) {
-  if (!email) throw new Error("Thiếu email");
-  return ethers.id(email.trim().toLowerCase());
-}
-
-export async function registerOnChain(email) {
-  const c = await getContract(true);
-  const tx = await c.register(hashEmail(email));
-  return tx.wait();
-}
-
-export async function isRegistered(address) {
-  const c = await getContract(false);
-  return c.isRegistered(address);
-}
-
+// ===== Đăng nhập bằng chữ ký + verify backend =====
 export async function loginWithSignature() {
-  const signer = await getSigner();
-  const address = await (await getSigner()).getAddress();
+  if (!window.ethereum) throw new Error("Chưa cài MetaMask");
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  const signer = await provider.getSigner();
+  const address = (await signer.getAddress()).toLowerCase();
 
-  // 1) Lấy nonce từ backend (nếu có)
-  let nonce;
-  try {
-    const r1 = await fetch(`${SERVER_URL}/api/nonce`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address })
-    });
-    if (!r1.ok) throw new Error(`/api/nonce failed ${r1.status}`);
-    ({ nonce } = await r1.json());
-    if (!nonce) throw new Error("Không nhận được nonce");
-  } catch {
-    // fallback demo: chỉ ký local xem như OK
-    await signer.signMessage("LOGIN_NONCE_DEMO");
-    return true;
-  }
+  // 1) xin nonce
+  const r1 = await fetch(`${SERVER_URL}/api/nonce`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address })
+  });
+  const { nonce } = await r1.json();
 
-  // 2) Ký nonce
+  // 2) ký nonce
   const signature = await signer.signMessage(nonce);
 
-  // 3) Gửi verify
+  // 3) verify + check on-chain
   const r2 = await fetch(`${SERVER_URL}/api/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ address, signature })
   });
-
-  if (!r2.ok) {
-    try {
-      const err = await r2.json();
-      throw new Error(err?.reason || err?.error || `Verify thất bại (${r2.status})`);
-    } catch {
-      throw new Error(`Verify thất bại (${r2.status})`);
-    }
+  const data = await r2.json();
+  if (!r2.ok || !data.success) {
+    // server trả "reason": "Not registered on chain" hoặc "Invalid signature"
+    return { ok: false, error: data.reason || data.error || "VERIFY_FAILED" };
   }
 
-  // 4) Có thể yêu cầu đã đăng ký on-chain
-  try {
-    const ok = await isRegistered(address);
-    return !!ok;
-  } catch {
-    // Nếu ABI/địa chỉ sai vẫn coi như pass (tuỳ bạn)
-    return true;
-  }
+  // 4) set phiên, lấy fullname từ local profile (nếu có)
+  const profile = getProfile(address);
+  const fullname = profile?.fullname || shortAddr(address);
+  setCurrentUser({ wallet: address, fullname });
+  return { ok: true };
 }
