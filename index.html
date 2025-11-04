@@ -11,8 +11,8 @@
     <div class="container">
       <a class="navbar-brand fw-semibold" href="index.html">Xác minh danh tính</a>
       <div class="ms-auto d-flex gap-2">
-        <a id="loginLink" class="btn btn-outline-primary" href="login.html">Đăng nhập</a>
-        <a id="registerLink" class="btn btn-primary" href="register.html">Đăng ký</a>
+        <a id="loginLink" class="btn btn-outline-success" href="login.html">Đăng nhập</a>
+        <a id="registerLink" class="btn btn-success" href="register.html">Đăng ký</a>
         <button id="logoutBtn" class="btn btn-outline-danger d-none">Đăng xuất</button>
       </div>
     </div>
@@ -23,34 +23,143 @@
       <h2 class="mb-3">Xin chào, <span id="displayName">Khách</span> </h2>
       <p class="text-muted mb-4">Trang chủ</p>
       <div id="ctaArea">
-        <a href="login.html" class="btn btn-primary me-2">Đăng nhập</a>
-        <a href="register.html" class="btn btn-outline-primary">Đăng ký</a>
+        <a href="login.html" class="btn btn-success me-2">Đăng nhập</a>
+        <a href="register.html" class="btn btn-outline-success">Đăng ký</a>
       </div>
     </div>
+
+    <!-- 🟢 PHẦN THÊM MỚI: Hiển thị lịch sử đăng nhập -->
+    <div id="historyCard" class="card shadow-sm rounded-4 my-4 d-none">
+      <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <h5 class="mb-0">Lịch sử đăng nhập</h5>
+          <div class="d-flex gap-2">
+            <input id="filterAddr" class="form-control form-control-sm" style="width:260px"
+                   placeholder="Lọc theo địa chỉ ví (0x...)"/>
+            <button id="btnRefresh" class="btn btn-sm btn-outline-success">Làm mới</button>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm align-middle" id="historyTable">
+            <thead class="table-light">
+              <tr>
+                <th style="width:60px">#</th>
+                <th>Địa chỉ ví</th>
+                <th>Thời gian (giờ VN)</th>
+                <th>IP</th>
+                <th>User Agent</th>
+                <th>Context</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="6" class="text-muted">Đang tải…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <!-- 🔴 HẾT PHẦN THÊM MỚI -->
   </main>
 
-  <script type="module">
-    import { getCurrentUser, clearCurrentUser } from "./web3.js";
+<script type="module">
+  import { getCurrentUser, clearCurrentUser, SERVER_URL, shortAddr } from "./web3.js";
 
-    const user = getCurrentUser();
-    const nameEl = document.getElementById('displayName');
-    const cta = document.getElementById('ctaArea');
-    const loginLink = document.getElementById('loginLink');
-    const registerLink = document.getElementById('registerLink');
-    const logoutBtn = document.getElementById('logoutBtn');
+  const user = getCurrentUser();
+  const nameEl = document.getElementById('displayName');
+  const cta = document.getElementById('ctaArea');
+  const loginLink = document.getElementById('loginLink');
+  const registerLink = document.getElementById('registerLink');
+  const logoutBtn = document.getElementById('logoutBtn');
 
-    if (user) {
-      nameEl.textContent = user.fullname || user.wallet?.slice(0,6)+"..."+user.wallet?.slice(-4) || "Người dùng";
-      cta.classList.add('d-none');
-      loginLink.classList.add('d-none');
-      registerLink.classList.add('d-none');
-      logoutBtn.classList.remove('d-none');
+  // 👉 Card lịch sử
+  const historyCard = document.getElementById('historyCard'); // 🟢
+
+  // UI theo trạng thái đăng nhập
+  if (user) {
+    nameEl.textContent = user.fullname || shortAddr(user.wallet);
+    cta.classList.add('d-none');
+    loginLink.classList.add('d-none');
+    registerLink.classList.add('d-none');
+    logoutBtn.classList.remove('d-none');
+
+    // 🟢 Chỉ khi có user mới hiện card & bắt đầu load lịch sử
+    historyCard?.classList.remove('d-none');
+    startHistoryLoading(user.wallet);
+  } else {
+    // 🟢 Khi chưa đăng nhập: ẩn card & không load lịch sử
+    historyCard?.classList.add('d-none');
+  }
+
+  logoutBtn?.addEventListener('click', () => {
+    clearCurrentUser();
+    window.location.reload();
+  });
+
+  // ====== Phần lịch sử (chỉ khởi tạo khi đăng nhập) ======
+  function startHistoryLoading(wallet) {
+    const TABLE_BODY  = document.querySelector("#historyTable tbody");
+    const INPUT_ADDR  = document.querySelector("#filterAddr");
+    const ONLY_MINE   = document.querySelector("#onlyMine");
+    const BTN_REFRESH = document.querySelector("#btnRefresh");
+
+    const fmtVN = (iso) => {
+      try {
+        const d = new Date(iso);
+        return new Intl.DateTimeFormat("vi-VN", {
+          dateStyle: "short", timeStyle: "medium", timeZone: "Asia/Ho_Chi_Minh"
+        }).format(d);
+      } catch { return iso; }
+    };
+    const shortUA = (ua) => ua ? (ua.length > 120 ? ua.slice(0,117)+"…" : ua) : "";
+    const shortA  = (a) => a ? (a.slice(0,6)+"…"+a.slice(-4)) : "";
+
+    // mặc định lọc “của tôi”
+    if (ONLY_MINE) ONLY_MINE.checked = true;
+
+    async function loadHistory() {
+      try {
+        let addr = (INPUT_ADDR?.value || "").trim();
+        if ((!addr) && ONLY_MINE?.checked && wallet) addr = wallet;
+
+        const qs = new URLSearchParams({ limit: "200" });
+        if (addr) qs.set("address", addr);
+
+        const res = await fetch(`${SERVER_URL}/api/login-history?${qs.toString()}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        const items = (data.items || []).slice().reverse();
+        TABLE_BODY.innerHTML = items.length
+          ? ""
+          : `<tr><td colspan="6" class="text-muted">Chưa có lượt đăng nhập nào.</td></tr>`;
+
+        items.forEach((it, idx) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${idx + 1}</td>
+            <td><span class="text-danger-emphasis" title="${it.address}">${shortA(it.address)}</span></td>
+            <td>${fmtVN(it.time)}</td>
+            <td>${it.ip || ""}</td>
+            <td title="${(it.userAgent||"").replace(/"/g,'&quot;')}">${shortUA(it.userAgent||"")}</td>
+            <td>${it.context ?? ""}</td>
+          `;
+          TABLE_BODY.appendChild(tr);
+        });
+      } catch (e) {
+        console.error(e);
+        TABLE_BODY.innerHTML = `<tr><td colspan="6" class="text-danger">Tải lịch sử thất bại: ${e.message}</td></tr>`;
+      }
     }
 
-    logoutBtn?.addEventListener('click', () => {
-      clearCurrentUser();
-      window.location.reload();
-    });
-  </script>
+    // Gắn sự kiện và bắt đầu load
+    BTN_REFRESH?.addEventListener("click", loadHistory);
+    INPUT_ADDR?.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
+    ONLY_MINE?.addEventListener("change", loadHistory);
+
+    loadHistory();                      // chỉ chạy khi đã đăng nhập
+    setInterval(loadHistory, 15000);    // auto refresh khi đã đăng nhập
+  }
+</script>
 </body>
 </html>

@@ -10,11 +10,11 @@
   <div class="container py-5">
     <div class="mx-auto card shadow-sm rounded-4" style="max-width:720px">
       <div class="card-body p-4 p-md-5">
-        <h3 class="mb-1">Đăng ký on-chain (không cần email)</h3>
-        <p class="text-muted">B1: Kết nối ví → B2: Chọn tên hiển thị → B3: Đăng ký on-chain.</p>
+        <h3 class="mb-1">Đăng ký on-chain</h3>
+        <p class="text-muted">B1: Kết nối ví → B2: Chọn tên hiển thị → B3: Đăng ký</p>
 
         <div class="mb-3 d-flex align-items-center gap-2">
-          <button type="button" id="btnConnect" class="btn btn-outline-primary">Kết nối ví</button>
+          <button type="button" id="btnConnect" class="btn btn-outline-success">Kết nối ví</button>
           <small>Địa chỉ ví: <span id="walletAddr" class="text-muted">—</span></small>
         </div>
 
@@ -29,45 +29,92 @@
             <a class="btn btn-outline-secondary" href="login.html">Đã có ví? Đăng nhập</a>
           </div>
         </form>
+
+        <!-- 🟢 PHẦN THÊM MỚI: vùng hiển thị trạng thái -->
+        <div id="statusMsg" class="mt-3 text-center text-muted"></div>
+        <!-- 🔴 HẾT PHẦN THÊM MỚI -->
       </div>
     </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.1/ethers.umd.min.js"></script>
-  <script type="module">
-    import { connectWallet, registerWalletOnly, setProfile, setCurrentUser, shortAddr } from "./web3.js";
+<script type="module">
+  import {
+    connectWallet,
+    registerWalletOnly,
+    setProfile,
+    setCurrentUser,
+    shortAddr,
+    loginWithSignature
+  } from "./web3.js"; // đã import loginWithSignature
 
-    let currentWallet = "";
+  let currentWallet = "";
+  const msg = document.getElementById("statusMsg") || (() => {
+    const d = document.createElement("div");
+    d.id = "statusMsg";
+    d.className = "mt-3 text-center text-muted";
+    document.querySelector(".card-body").appendChild(d);
+    return d;
+  })();
+  const btnConnect = document.getElementById("btnConnect");
+  const form = document.getElementById("registerForm");
+  const submitBtn = form.querySelector('button[type="submit"]');
 
-    document.getElementById("btnConnect").onclick = async () => {
-      try {
-        currentWallet = await connectWallet();
-        document.getElementById("walletAddr").textContent = currentWallet || "—";
-      } catch (e) { alert(e?.message || e); }
-    };
+  btnConnect.onclick = async () => {
+    try {
+      currentWallet = await connectWallet();
+      document.getElementById("walletAddr").textContent = currentWallet || "—";
+      msg.textContent = "✅ Đã kết nối ví: " + shortAddr(currentWallet);
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || e);
+    }
+  };
 
-    const form = document.getElementById("registerForm");
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault(); e.stopPropagation();
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
 
-      if (!currentWallet) { alert("Vui lòng kết nối ví trước."); return; }
+    if (!currentWallet) { alert("Vui lòng kết nối ví trước."); return; }
 
-      const fullname = document.getElementById("fullname").value.trim();
-      if (!fullname) { form.classList.add("was-validated"); return; }
+    const fullname = document.getElementById("fullname").value.trim();
+    if (!fullname) { form.classList.add("was-validated"); return; }
 
-      try {
-        // gọi contract.register(...)
-        await registerWalletOnly();
-        // lưu hồ sơ hiển thị theo ví
-        setProfile(currentWallet, { fullname });
-        setCurrentUser({ wallet: currentWallet.toLowerCase(), fullname });
+    try {
+      // Disable nút để tránh bấm nhiều lần
+      submitBtn.disabled = true;
+      submitBtn.innerText = "Đang đăng ký…";
+      msg.textContent = "⏳ Đang gửi giao dịch đăng ký lên blockchain...";
 
-        alert("Đăng ký on-chain thành công!");
-        window.location.href = "index.html";
-      } catch (e) {
-        alert("Đăng ký thất bại: " + (e?.reason || e?.message || e));
+      // 1) Gửi tx register(...)
+      await registerWalletOnly();
+
+      // 2) Lưu hồ sơ hiển thị
+      setProfile(currentWallet, { fullname });
+      setCurrentUser({ wallet: currentWallet.toLowerCase(), fullname });
+
+      msg.textContent = "✅ Đăng ký thành công! Đang xác thực đăng nhập…";
+
+      // 3) Ký nonce + verify server (ghi lịch sử)
+      const r = await loginWithSignature("after-register");
+
+      if (r.ok) {
+        // 👉 Chuyển hướng NGAY, không setTimeout, không alert
+        // Dùng replace để tránh quay lại trang đăng ký khi Back
+        window.location.replace("./index.html"); // đảm bảo cùng origin
+        return;
+      } else {
+        msg.textContent = "⚠️ Đăng ký xong nhưng đăng nhập tự động thất bại: " + r.error;
+        submitBtn.disabled = false;
+        submitBtn.innerText = "Đăng ký on-chain";
       }
-    });
-  </script>
+    } catch (e) {
+      console.error(e);
+      msg.textContent = "❌ Lỗi: " + (e?.reason || e?.message || e);
+      submitBtn.disabled = false;
+      submitBtn.innerText = "Đăng ký on-chain";
+    }
+  });
+</script>
 </body>
 </html>
