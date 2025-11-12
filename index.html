@@ -14,6 +14,8 @@
         <a id="loginLink" class="btn btn-outline-success" href="login.html">Đăng nhập</a>
         <a id="registerLink" class="btn btn-success" href="register.html">Đăng ký</a>
         <button id="logoutBtn" class="btn btn-outline-danger d-none">Đăng xuất</button>
+        <!-- <a id="admin" class="btn btn-success" href="admin.html">Admin</a> -->
+         <button id="btnAdmin" class="btn btn-outline-warning  d-none">Trang quản trị</button>
       </div>
     </div>
   </nav>
@@ -34,8 +36,7 @@
         <div class="d-flex align-items-center justify-content-between mb-3">
           <h5 class="mb-0">Lịch sử đăng nhập</h5>
           <div class="d-flex gap-2">
-            <input id="filterAddr" class="form-control form-control-sm" style="width:260px"
-                   placeholder="Lọc theo địa chỉ ví (0x...)"/>
+            <input id="filterAddr" class="form-control form-control-sm" style="width:360px"disabled/>
             <button id="btnRefresh" class="btn btn-sm btn-outline-success">Làm mới</button>
           </div>
         </div>
@@ -97,69 +98,105 @@
   });
 
   // ====== Phần lịch sử (chỉ khởi tạo khi đăng nhập) ======
-  function startHistoryLoading(wallet) {
-    const TABLE_BODY  = document.querySelector("#historyTable tbody");
-    const INPUT_ADDR  = document.querySelector("#filterAddr");
-    const ONLY_MINE   = document.querySelector("#onlyMine");
-    const BTN_REFRESH = document.querySelector("#btnRefresh");
+function startHistoryLoading(wallet) {
+  const TABLE_BODY  = document.querySelector("#historyTable tbody");
+  const INPUT_ADDR  = document.querySelector("#filterAddr");
+  const BTN_REFRESH = document.querySelector("#btnRefresh");
 
-    const fmtVN = (iso) => {
-      try {
-        const d = new Date(iso);
-        return new Intl.DateTimeFormat("vi-VN", {
-          dateStyle: "short", timeStyle: "medium", timeZone: "Asia/Ho_Chi_Minh"
-        }).format(d);
-      } catch { return iso; }
-    };
-    const shortUA = (ua) => ua ? (ua.length > 120 ? ua.slice(0,117)+"…" : ua) : "";
-    const shortA  = (a) => a ? (a.slice(0,6)+"…"+a.slice(-4)) : "";
-
-    // mặc định lọc “của tôi”
-    if (ONLY_MINE) ONLY_MINE.checked = true;
-
-    async function loadHistory() {
-      try {
-        let addr = (INPUT_ADDR?.value || "").trim();
-        if ((!addr) && ONLY_MINE?.checked && wallet) addr = wallet;
-
-        const qs = new URLSearchParams({ limit: "200" });
-        if (addr) qs.set("address", addr);
-
-        const res = await fetch(`${SERVER_URL}/api/login-history?${qs.toString()}`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-
-        const items = (data.items || []).slice().reverse();
-        TABLE_BODY.innerHTML = items.length
-          ? ""
-          : `<tr><td colspan="6" class="text-muted">Chưa có lượt đăng nhập nào.</td></tr>`;
-
-        items.forEach((it, idx) => {
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${idx + 1}</td>
-            <td><span class="text-danger-emphasis" title="${it.address}">${shortA(it.address)}</span></td>
-            <td>${fmtVN(it.time)}</td>
-            <td>${it.ip || ""}</td>
-            <td title="${(it.userAgent||"").replace(/"/g,'&quot;')}">${shortUA(it.userAgent||"")}</td>
-            <td>${it.context ?? ""}</td>
-          `;
-          TABLE_BODY.appendChild(tr);
-        });
-      } catch (e) {
-        console.error(e);
-        TABLE_BODY.innerHTML = `<tr><td colspan="6" class="text-danger">Tải lịch sử thất bại: ${e.message}</td></tr>`;
-      }
-    }
-
-    // Gắn sự kiện và bắt đầu load
-    BTN_REFRESH?.addEventListener("click", loadHistory);
-    INPUT_ADDR?.addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
-    ONLY_MINE?.addEventListener("change", loadHistory);
-
-    loadHistory();                      // chỉ chạy khi đã đăng nhập
-    setInterval(loadHistory, 15000);    // auto refresh khi đã đăng nhập
+  // 🟢 TỰ DÁN địa chỉ đang đăng nhập vào ô tìm kiếm + khoá sửa (tuỳ chọn)
+  if (INPUT_ADDR) {
+    INPUT_ADDR.value = wallet || "";
+    // Nếu muốn cho phép sửa, bỏ dòng dưới
+    // INPUT_ADDR.readOnly = true;
+    INPUT_ADDR.title = "Đang hiển thị lịch sử của: " + (wallet || "");
   }
+
+  const fmtVN  = (iso) => {
+    try { return new Intl.DateTimeFormat("vi-VN", {dateStyle:"short", timeStyle:"medium", timeZone:"Asia/Ho_Chi_Minh"}).format(new Date(iso)); }
+    catch { return iso; }
+  };
+  const shortUA = (ua) => ua ? (ua.length > 120 ? ua.slice(0,117)+"…" : ua) : "";
+  const shortA  = (a)  => a ? (a.slice(0,6)+"…"+a.slice(-4)) : "";
+
+  async function loadHistory() {
+    try {
+      // Lấy chuỗi lọc từ input (đã auto dán ví hiện tại)
+      let addr = (INPUT_ADDR?.value || "").trim().toLowerCase().replace(/^0x/, "");
+
+      // Lấy nhiều bản ghi rồi lọc tại client
+      const qs  = new URLSearchParams({ limit: "1000" });
+      const res = await fetch(`${SERVER_URL}/api/login-history?${qs.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      let items = (data.items || []).slice().reverse();
+
+      // 🔍 Chỉ giữ các log có address chứa chuỗi nhập (mặc định là ví của mình)
+      if (addr) {
+        items = items.filter(it =>
+          (it.address || "").toLowerCase().replace(/^0x/, "").includes(addr)
+        );
+      }
+
+      TABLE_BODY.innerHTML = items.length
+        ? ""
+        : `<tr><td colspan="6" class="text-muted">Không có lịch sử đăng nhập.</td></tr>`;
+
+      items.forEach((it, idx) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${idx + 1}</td>
+          <td><span class="text-danger-emphasis" title="${it.address}">${shortA(it.address)}</span></td>
+          <td>${fmtVN(it.time)}</td>
+          <td>${it.ip || ""}</td>
+          <td title="${(it.userAgent||"").replace(/"/g,'&quot;')}">${shortUA(it.userAgent||"")}</td>
+          <td>${it.context ?? ""}</td>
+        `;
+        TABLE_BODY.appendChild(tr);
+      });
+    } catch (e) {
+      console.error(e);
+      TABLE_BODY.innerHTML = `<tr><td colspan="6" class="text-danger">Tải lịch sử thất bại: ${e.message}</td></tr>`;
+    }
+  }
+
+  // 🟢 Nút "Làm mới": xoá text (nếu bạn muốn) rồi dán lại ví mình và load
+  BTN_REFRESH?.addEventListener("click", () => {
+    if (INPUT_ADDR) INPUT_ADDR.value = wallet || "";
+    loadHistory();
+  });
+
+  // 🟢 Tự load ngay khi vào trang + auto refresh
+  loadHistory();
+  setInterval(loadHistory, 15000);
+
+  // (Tuỳ chọn) Debounce khi gõ để tự lọc
+  let timer;
+  INPUT_ADDR?.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(loadHistory, 300);
+  });
+}
+
+const btnAdmin = document.getElementById("btnAdmin");
+
+// 🧩 Nếu user là admin thì hiện nút, ngược lại ẩn đi
+if (user && user.role === "admin") {
+  btnAdmin?.classList.remove("d-none");
+}
+
+// // 🧠 Khi bấm nút admin: kiểm tra quyền trước khi chuyển trang
+// btnAdmin?.addEventListener("click", () => {
+//   if (!user || user.role !== "admin") {
+//     alert("Bạn không có quyền truy cập trang quản trị!");
+//     return; // ❌ Dừng luôn, không chuyển
+//   }
+//   // ✅ Là admin → cho phép chuyển
+//   window.location.href = "admin.html";
+// });
+
+
+
 </script>
 </body>
 </html>

@@ -10,6 +10,7 @@ const { ethers } = require("ethers"); // v6: ethers.verifyMessage ; v5: ethers.u
 const RPC_URL = process.env.RPC_URL || "http://127.0.0.1:8545";
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const PORT = process.env.PORT || 3001;
+const ADMIN_ADDRESS = (process.env.ADMIN_ADDRESS || "").toLowerCase();
 if (!CONTRACT_ADDRESS) {
   console.error("❌ Missing CONTRACT_ADDRESS in .env");
   process.exit(1);
@@ -84,6 +85,7 @@ app.post("/api/verify", async (req, res) => {
     const recovered = ethers.verifyMessage(nonce, signature);
     const okSig = recovered.toLowerCase() === address.toLowerCase();
     const registered = await contract.isRegistered(address);
+    const isAdmin = address.toLowerCase() === ADMIN_ADDRESS;//aaaaaaaa
 
     console.log("→ /api/verify", { address, recovered, okSig, registered });
 
@@ -100,7 +102,15 @@ app.post("/api/verify", async (req, res) => {
       saveHistoryToFile();
 
       nonces.delete(address.toLowerCase());
-      return res.json({ success: true });
+      // return res.json({ success: true });aaaaaaaa
+      const isAdmin = address.toLowerCase() === ADMIN_ADDRESS;
+
+      return res.json({
+        success: true,
+        address,
+        isAdmin
+      });
+
     }
 
     const reason = okSig ? "NOT_REGISTERED" : "INVALID_SIGNATURE";

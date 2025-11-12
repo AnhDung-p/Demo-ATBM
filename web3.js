@@ -126,6 +126,7 @@ export async function isRegisteredOnChain(address) {
 
 // ===== Đăng nhập bằng chữ ký + verify backend =====
 // 🟢 PHẦN THÊM MỚI: cho phép truyền context để lưu vào lịch sử server
+// ===== Đăng nhập bằng chữ ký + verify backend (đã sửa để nhận isAdmin) =====
 export async function loginWithSignature(context = "index") {
   if (!window.ethereum) throw new Error("Chưa cài MetaMask");
   await ensureNetwork();
@@ -136,36 +137,41 @@ export async function loginWithSignature(context = "index") {
 
   // 1) xin nonce
   const r1 = await fetch(`${SERVER_URL}/api/nonce`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ address })
   });
-  if (!r1.ok) {
-    return { ok: false, error: `NONCE_HTTP_${r1.status}` };
-  }
-  const j1 = await r1.json();
-  const nonce = j1?.nonce;
+  if (!r1.ok) return { ok: false, error: `NONCE_HTTP_${r1.status}` };
+  const { nonce } = await r1.json();
   if (!nonce) return { ok: false, error: "NO_NONCE_FROM_SERVER" };
 
   // 2) ký nonce
   const signature = await signer.signMessage(nonce);
 
-  // 3) verify + check on-chain (server sẽ ghi lịch sử nếu success)
+  // 3) verify ở server (server phải trả { success, address, isAdmin })
   const r2 = await fetch(`${SERVER_URL}/api/verify`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ address, signature, context })
   });
   const data = await r2.json().catch(() => ({}));
   if (!r2.ok || !data.success) {
-    // server có thể trả reason: "NOT_REGISTERED" | "INVALID_SIGNATURE" ...
     return { ok: false, error: data.reason || data.error || `VERIFY_HTTP_${r2.status}` };
   }
 
-  // 4) set phiên, lấy fullname từ local profile (nếu có)
-  const profile = getProfile(address);
+  // 4) lưu phiên (thêm role dựa vào isAdmin)
+  const profile  = getProfile(address);
   const fullname = profile?.fullname || shortAddr(address);
-  setCurrentUser({ wallet: address, fullname });
-  return { ok: true };
+  setCurrentUser({
+    wallet: data.address,
+    fullname,
+    role: data.isAdmin ? "admin" : "user"
+  });
+
+  // 5) trả về cho login.html để redirect admin/index
+  return { ok: true, isAdmin: !!data.isAdmin, address: data.address };
 }
+
 
 // 🟢 PHẦN THÊM MỚI: tiện ích lấy lịch sử từ backend (nếu muốn dùng ở trang khác)
 export async function fetchLoginHistory({ address = "", limit = 200 } = {}) {
